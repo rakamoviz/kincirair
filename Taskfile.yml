@@ -1,0 +1,14 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  GREETING: Hello, World!
+
+tasks:
+  build:
+    cmds:
+      - go build -o pubsub ./cmd/pubsub
+      - go build -o router ./cmd/router
+      - go build -o kafkapublisher ./cmd/kafkapublisher
+      - go build -o kafkasubscriber ./cmd/kafkasubscriber
