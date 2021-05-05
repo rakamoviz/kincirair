@@ -12,12 +12,16 @@ import (
 )
 
 func main() {
+	saramaPublisherConfig := kafka.DefaultSaramaSyncPublisherConfig()
+	//saramaPublisherConfig.Producer.Partitioner = sarama.NewManualPartitioner
+
 	publisher, err := kafka.NewPublisher(
 		kafka.PublisherConfig{
 			Brokers: []string{"localhost:9092"},
 			Marshaler: kafka.NewWithPartitioningMarshaler(func(topic string, msg *message.Message) (string, error) {
 				return msg.Metadata.Get("partition"), nil
 			}),
+			OverwriteSaramaConfig: saramaPublisherConfig,
 		},
 		watermill.NewStdLogger(false, false),
 	)
@@ -35,7 +39,7 @@ func publishMessages(publisher message.Publisher) {
 		msg := message.NewMessage(watermill.NewUUID(), []byte("Hello, world!"))
 		msg.Metadata.Set("partition", strconv.Itoa(rand.Intn(2)+1))
 
-		if err := publisher.Publish("example.topic", msg); err != nil {
+		if err := publisher.Publish("experiment.topic", msg); err != nil {
 			panic(err)
 		}
 
