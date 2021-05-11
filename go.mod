@@ -5,6 +5,9 @@ go 1.15
 require (
 	github.com/Shopify/sarama v1.26.0
 	github.com/ThreeDotsLabs/watermill v1.1.1
+	github.com/ThreeDotsLabs/watermill-amqp v1.1.0
 	github.com/ThreeDotsLabs/watermill-kafka/v2 v2.2.1
-	github.com/iguazio/sarama v1.26.2-0.20200924193755-a29f513a7e23 // indirect
+	github.com/golang/protobuf v1.5.0
+	github.com/pkg/errors v0.8.1
+	google.golang.org/protobuf v1.26.0
 )

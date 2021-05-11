@@ -10,3 +10,6 @@ https://github.com/Shopify/sarama/issues/1192
 
 
 https://github.com/Shopify/sarama/issues/1608
+
+
+protoc --proto_path=cmd/cqrs --go_out=paths=source_relative:. inputs/events.proto
