@@ -12,5 +12,5 @@ tasks:
       - go build -o router ./cmd/router
       - go build -o kafkapublisher ./cmd/kafkapublisher
       - go build -o kafkasubscriber ./cmd/kafkasubscriber
-      - protoc --proto_path=cmd/cqrs/inputs --go_out=paths=source_relative:cmd/cqrs events.proto
+      - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrs/inputs --go_out=paths=source_relative:cmd/cqrs events.proto
       - go build -o cqrs ./cmd/cqrs
