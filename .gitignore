@@ -1,1 +1,7 @@
 .docker/
+pubsub.bin
+router.bin
+kafkapublisher.bin
+kafkasubscriber.bin
+cqrs.bin
+cqrskafka.bin

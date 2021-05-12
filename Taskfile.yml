@@ -8,11 +8,11 @@ vars:
 tasks:
   build:
     cmds:
-      - go build -o pubsub ./cmd/pubsub
-      - go build -o router ./cmd/router
-      - go build -o kafkapublisher ./cmd/kafkapublisher
-      - go build -o kafkasubscriber ./cmd/kafkasubscriber
+      - go build -o pubsub.bin ./cmd/pubsub
+      - go build -o router.bin ./cmd/router
+      - go build -o kafkapublisher.bin ./cmd/kafkapublisher
+      - go build -o kafkasubscriber.bin ./cmd/kafkasubscriber
       - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrs/inputs --go_out=paths=source_relative:cmd/cqrs events.proto
-      - go build -o cqrs ./cmd/cqrs
+      - go build -o cqrs.bin ./cmd/cqrs
       - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrskafka/inputs --go_out=paths=source_relative:cmd/cqrskafka events.proto
-      - go build -o cqrskafka ./cmd/cqrskafka
+      - go build -o cqrskafka.bin ./cmd/cqrskafka
