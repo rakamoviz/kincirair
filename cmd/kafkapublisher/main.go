@@ -13,7 +13,6 @@ import (
 
 func main() {
 	saramaPublisherConfig := kafka.DefaultSaramaSyncPublisherConfig()
-	//saramaPublisherConfig.Producer.Partitioner = sarama.NewManualPartitioner
 
 	publisher, err := kafka.NewPublisher(
 		kafka.PublisherConfig{

@@ -14,3 +14,5 @@ tasks:
       - go build -o kafkasubscriber ./cmd/kafkasubscriber
       - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrs/inputs --go_out=paths=source_relative:cmd/cqrs events.proto
       - go build -o cqrs ./cmd/cqrs
+      - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrskafka/inputs --go_out=paths=source_relative:cmd/cqrskafka events.proto
+      - go build -o cqrskafka ./cmd/cqrskafka
