@@ -7,3 +7,6 @@ cqrs.bin
 cqrskafka.bin
 cqrskafka_separated_domain.bin
 cqrskafka_separated_eventdenormalizer.bin
+cqrskafka_separated_domain_partitioned_processor.bin
+cqrskafka_separated_domain_partitioned_publisher.bin
+cqrskafka_separated_eventdenormalizer_partitioned.bin
