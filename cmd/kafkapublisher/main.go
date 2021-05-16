@@ -36,7 +36,7 @@ func publishMessages(publisher message.Publisher) {
 
 	for {
 		msg := message.NewMessage(watermill.NewUUID(), []byte("Hello, world!"))
-		msg.Metadata.Set("partition", strconv.Itoa(rand.Intn(2)+1))
+		msg.Metadata.Set("partition", "XXX"+strconv.Itoa(rand.Intn(2)+1))
 
 		if err := publisher.Publish("experiment.topic", msg); err != nil {
 			panic(err)
