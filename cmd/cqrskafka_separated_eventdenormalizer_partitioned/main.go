@@ -141,6 +141,11 @@ func (b *BookingsFinancialReport) Handle(ctx context.Context, e interface{}) err
 
 	event := e.(*RoomBooked)
 
+	fmt.Printf(
+		"BookingsFinancialReport handling RoomBooked event for aggregate ID %s with partition-key %s\n",
+		event.GetCqrsAggregateId(), event.GetPartitionKey(),
+	)
+
 	// When we are using Pub/Sub which doesn't provide exactly-once delivery semantics, we need to deduplicate messages.
 	// GoChannel Pub/Sub provides exactly-once delivery,
 	// but let's make this example ready for other Pub/Sub implementations.

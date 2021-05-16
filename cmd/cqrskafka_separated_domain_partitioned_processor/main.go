@@ -130,6 +130,11 @@ func (b BookRoomHandler) Handle(ctx context.Context, c interface{}) error {
 	// c is always the type returned by `NewCommand`, so casting is always safe
 	cmd := c.(*BookRoom)
 
+	fmt.Printf(
+		"BookRoomHandler handling BookRoom command for aggregate ID %s with partition-key %s\n",
+		cmd.GetCqrsAggregateId(), cmd.GetPartitionKey(),
+	)
+
 	// some random price, in production you probably will calculate in wiser way
 	price := (rand.Int63n(40) + 1) * 10
 
@@ -171,6 +176,11 @@ func (b RoomBookedHandler) NewEvent() interface{} {
 func (b RoomBookedHandler) Handle(ctx context.Context, c interface{}) error {
 	// c is always the type returned by `NewCommand`, so casting is always safe
 	event := c.(*RoomBooked)
+
+	fmt.Printf(
+		"RoomBookedHandler handling RoomBooked event for aggregate ID %s with partition-key %s\n",
+		event.GetCqrsAggregateId(), event.GetPartitionKey(),
+	)
 
 	reservation := Reservation{
 		Id:        event.ReservationId,
