@@ -1,0 +1,86 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+type EventHandler interface {
+	HandleEvent()
+}
+
+type LePointer struct {
+	
+}
+
+func (lp *LePointer) HandleEvent() {
+	fmt.Println("hehe")
+}
+
+type LeNonPointer struct {
+	
+}
+
+func (lnp LeNonPointer) HandleEvent() {
+	fmt.Println("kakaka")
+}
+
+type CqrsMessage interface {
+	GetAggregateId() string
+	GetAggregateName() string
+}
+
+type Aggregate interface {
+	GetAggregateId() string
+	GetAggregateName() string	
+}
+
+type Kamar struct {
+	RoomId string	
+}
+
+func (kmr Kamar) GetAggregateId() string {
+	return kmr.RoomId
+}
+
+func (kmr Kamar) GetAggregateName() string {
+	return FullyQualifiedStructName(kmr)
+}
+
+func FullyQualifiedStructName(v interface{}) string {
+	s := fmt.Sprintf("%T", v)
+	s = strings.TrimLeft(s, "*")
+
+	return s
+}
+
+/*
+func (k Kamar) GetAggregateName() string {
+	s := fmt.Sprintf("%T", k)
+	s = strings.TrimLeft(s, "*")
+
+	return s
+}
+*/
+
+func RegisterAggregate(aggregates map[string]Aggregate, agg Aggregate) {
+	aggregates[agg.GetAggregateName()] = agg
+}
+
+func main() {
+	eh := []EventHandler {
+		&LePointer{},
+		LeNonPointer{},
+	}
+	fmt.Println("Hello World", eh)
+	
+	for _, e := range eh {
+		e.HandleEvent()
+	}
+	
+	k := Kamar{RoomId: "1"}
+	fmt.Println(k.GetAggregateName())
+	
+	aggregates := make(map[string]Aggregate)
+	RegisterAggregate(aggregates, k)
+}

@@ -13,3 +13,9 @@ https://github.com/Shopify/sarama/issues/1608
 
 
 protoc --proto_path=cmd/cqrs --go_out=paths=source_relative:. inputs/events.proto
+
+https://stackoverflow.com/questions/3897229/extending-protobuf-with-my-own-methods
+
+main.BookRoom
+main.OrderBeer
+events
