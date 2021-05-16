@@ -16,3 +16,7 @@ tasks:
       - go build -o cqrs.bin ./cmd/cqrs
       - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrskafka/inputs --go_out=paths=source_relative:cmd/cqrskafka events.proto
       - go build -o cqrskafka.bin ./cmd/cqrskafka
+      - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrskafka_separated_domain/inputs --go_out=paths=source_relative:cmd/cqrskafka_separated_domain events.proto
+      - go build -o cqrskafka_separated_domain.bin ./cmd/cqrskafka_separated_domain
+      - protoc --plugin=protoc-gen-go=$GOPATH/bin/protoc-gen-go_APIv1 --proto_path=cmd/cqrskafka_separated_eventdenormalizer/inputs --go_out=paths=source_relative:cmd/cqrskafka_separated_eventdenormalizer events.proto
+      - go build -o cqrskafka_separated_eventdenormalizer.bin ./cmd/cqrskafka_separated_eventdenormalizer
