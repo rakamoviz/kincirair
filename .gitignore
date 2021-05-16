@@ -5,3 +5,5 @@ kafkapublisher.bin
 kafkasubscriber.bin
 cqrs.bin
 cqrskafka.bin
+cqrskafka_separated_domain.bin
+cqrskafka_separated_eventdenormalizer.bin

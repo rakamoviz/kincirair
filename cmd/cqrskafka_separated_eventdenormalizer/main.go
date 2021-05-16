@@ -77,19 +77,33 @@ func main() {
 	process(ctx, messages)
 }
 
+func Find(slice []string, val string) (int, bool) {
+	for i, item := range slice {
+		if item == val {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 func processMessage(
 	ctx context.Context, cqrsMarshaler cqrs.CommandEventMarshaler,
-	expectedEventName string, msg *message.Message,
+	expectedEventNames []string, msg *message.Message,
 	bookingsFinancialReport *BookingsFinancialReport,
 ) {
 	defer msg.Ack()
 
 	messageEventName := cqrsMarshaler.NameFromMessage(msg)
-	if messageEventName != expectedEventName {
+	_, messageExpected := Find(expectedEventNames, messageEventName)
+	if !messageExpected {
 		return
 	}
 
-	event := &RoomBooked{}
+	var event interface{}
+	if messageEventName == "main.RoomBooked" {
+		event = &RoomBooked{}
+	}
+
 	cqrsMarshaler.Unmarshal(msg, event)
 
 	bookingsFinancialReport.Handle(ctx, event)
@@ -99,13 +113,16 @@ func process(ctx context.Context, messages <-chan *message.Message) {
 	cqrsMarshaler := cqrs.ProtobufMarshaler{}
 	bookingsFinancialReport := NewBookingsFinancialReport()
 
-	expectedEvent := &RoomBooked{}
-	expectedEventName := cqrsMarshaler.Name(expectedEvent)
+	expectedEventNames := []string{}
+	expectedEvents := []interface{}{&RoomBooked{}}
+	for _, expectedEvent := range expectedEvents {
+		expectedEventNames = append(expectedEventNames, cqrsMarshaler.Name(expectedEvent))
+	}
 
 	for msg := range messages {
 		processMessage(
 			ctx, cqrsMarshaler,
-			expectedEventName, msg,
+			expectedEventNames, msg,
 			bookingsFinancialReport,
 		)
 	}
