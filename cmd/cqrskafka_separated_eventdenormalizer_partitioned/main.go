@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	fmt "fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,10 @@ import (
 	"github.com/ThreeDotsLabs/watermill-kafka/v2/pkg/kafka"
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	"gopkg.in/mgo.v2/bson"
 )
 
 const (
@@ -21,6 +25,16 @@ const (
 	maxProcessingTime = 2 * time.Second
 	slackTime         = 5 * time.Second
 )
+
+type DBError struct {
+	StatusCode int
+
+	Err error
+}
+
+func (r *DBError) Error() string {
+	return r.Err.Error()
+}
 
 func FullyQualifiedStructName(v interface{}) string {
 	s := fmt.Sprintf("%T", v)
@@ -77,36 +91,65 @@ func (r Reservation) GetAggregateName() string {
 	return FullyQualifiedStructName(r)
 }
 
-type ReservationRepository struct {
-	reservations map[string]Reservation
+type FinancialBooking struct {
+	Id    string `bson:"_id"`
+	Total int64  `bson:"total"`
 }
 
-func NewReservationRepository() *ReservationRepository {
-	return &ReservationRepository{
-		reservations: make(map[string]Reservation),
+type FinancialBookingRepository struct {
+	collection *mongo.Collection
+}
+
+func NewFinancialBookingRepository(collection *mongo.Collection) *FinancialBookingRepository {
+	return &FinancialBookingRepository{
+		collection: collection,
 	}
 }
 
-func (repo *ReservationRepository) FindById(id string) (Reservation, error) {
-	r, ok := repo.reservations[id]
+func (repo *FinancialBookingRepository) FindById(ctx context.Context, id string) (FinancialBooking, error) {
+	opCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 
-	if !ok {
-		keys := make([]string, len(repo.reservations))
+	filter := bson.M{"_id": id}
+	financialBooking := FinancialBooking{}
 
-		i := 0
-		for k := range repo.reservations {
-			keys[i] = k
-			i++
+	err := repo.collection.FindOne(opCtx, filter).Decode(&financialBooking)
+
+	if err == mongo.ErrNoDocuments {
+		return financialBooking, &DBError{
+			StatusCode: 0,
+			Err:        err,
 		}
-
-		return r, fmt.Errorf("Reservation not found for %s %v", id, keys)
 	}
 
-	return r, nil
+	if err != nil {
+		return financialBooking, &DBError{
+			StatusCode: -1,
+			Err:        err,
+		}
+	}
+
+	return financialBooking, nil
 }
 
-func (repo *ReservationRepository) Save(r Reservation) error {
-	repo.reservations[r.Id] = r
+func (repo *FinancialBookingRepository) Save(ctx context.Context, f FinancialBooking) error {
+	opCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": f.Id}
+	update := bson.M{"$set": f}
+	upsert := true
+
+	_, upsertError := repo.collection.UpdateOne(opCtx, filter, update, &options.UpdateOptions{
+		Upsert: &upsert,
+	})
+
+	if upsertError != nil {
+		return &DBError{
+			StatusCode: -1,
+			Err:        upsertError,
+		}
+	}
 
 	return nil
 }
@@ -177,21 +220,20 @@ func NewRoomBooked(
 	}
 }
 
-type BookingsFinancialReport struct {
-	handledBookings     map[string]struct{}
-	totalCharge         int64
-	lock                sync.Mutex
-	aggregateRepository *ReservationRepository
+type FinancialBookingBuilder struct {
+	id         string
+	lock       sync.Mutex
+	repository *FinancialBookingRepository
 }
 
-func NewBookingsFinancialReport(aggregateRepository *ReservationRepository) *BookingsFinancialReport {
-	return &BookingsFinancialReport{
-		handledBookings:     map[string]struct{}{},
-		aggregateRepository: aggregateRepository,
+func NewFinancialBookingBuilder(id string, repository *FinancialBookingRepository) *FinancialBookingBuilder {
+	return &FinancialBookingBuilder{
+		id:         id,
+		repository: repository,
 	}
 }
 
-func (b *BookingsFinancialReport) Handle(ctx context.Context, e interface{}) error {
+func (b *FinancialBookingBuilder) Handle(ctx context.Context, e interface{}) error {
 	// Handle may be called concurrently, so it need to be thread safe.
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -203,17 +245,30 @@ func (b *BookingsFinancialReport) Handle(ctx context.Context, e interface{}) err
 		event.CqrsHeader().AggregateId, event.GetPartitionKey(),
 	)
 
-	// When we are using Pub/Sub which doesn't provide exactly-once delivery semantics, we need to deduplicate messages.
-	// GoChannel Pub/Sub provides exactly-once delivery,
-	// but let's make this example ready for other Pub/Sub implementations.
-	if _, ok := b.handledBookings[event.ReservationId]; ok {
-		return nil
+	financialBooking := FinancialBooking{Id: b.id, Total: 0}
+	fb, err := b.repository.FindById(ctx, b.id)
+
+	if err != nil {
+		dbError, ok := err.(*DBError)
+		if !ok {
+			return err
+		}
+
+		if dbError.StatusCode != 0 {
+			return err
+		}
+
+		financialBooking.Total = event.Price
+	} else {
+		financialBooking.Total = fb.Total + event.Price
 	}
-	b.handledBookings[event.ReservationId] = struct{}{}
 
-	b.totalCharge += event.Price
+	err = b.repository.Save(ctx, financialBooking)
+	if err != nil {
+		return err
+	}
 
-	fmt.Printf(">>> Already booked rooms for $%d\n", b.totalCharge)
+	fmt.Printf(">>> Current financial booking $%v\n", financialBooking)
 	return nil
 }
 
@@ -255,7 +310,7 @@ func Find(slice []string, val string) (int, bool) {
 func processMessage(
 	ctx context.Context, cqrsMarshaler cqrs.CommandEventMarshaler,
 	expectedEventNames []string, msg *message.Message,
-	bookingsFinancialReport *BookingsFinancialReport,
+	financialBookingBuilder *FinancialBookingBuilder,
 ) {
 	defer msg.Ack()
 
@@ -272,14 +327,30 @@ func processMessage(
 
 	cqrsMarshaler.Unmarshal(msg, event)
 
-	bookingsFinancialReport.Handle(ctx, event)
+	financialBookingBuilder.Handle(ctx, event)
 }
 
 func process(ctx context.Context, messages <-chan *message.Message) {
 	cqrsMarshaler := PartitionedCommandEventMarshaler{cqrs.ProtobufMarshaler{}}
 
-	reservationRepository := NewReservationRepository()
-	bookingsFinancialReport := NewBookingsFinancialReport(reservationRepository)
+	ctx = context.Background()
+	opCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017/")
+	client, err := mongo.Connect(opCtx, clientOptions)
+
+	time.Sleep(1 * time.Second)
+
+	err = client.Ping(opCtx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	financialBookingsCollection := client.Database("kincirair").Collection("financial_bookings")
+
+	financialBookingRepository := NewFinancialBookingRepository(financialBookingsCollection)
+	financialBookingBuilder := NewFinancialBookingBuilder("voc", financialBookingRepository)
 
 	expectedEventNames := []string{}
 	expectedEvents := []interface{}{&RoomBooked{}}
@@ -291,7 +362,7 @@ func process(ctx context.Context, messages <-chan *message.Message) {
 		processMessage(
 			ctx, cqrsMarshaler,
 			expectedEventNames, msg,
-			bookingsFinancialReport,
+			financialBookingBuilder,
 		)
 	}
 }

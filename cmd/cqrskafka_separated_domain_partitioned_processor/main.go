@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	"gopkg.in/mgo.v2/bson"
 
 	"github.com/Shopify/sarama"
 	"github.com/ThreeDotsLabs/watermill-kafka/v2/pkg/kafka"
@@ -27,6 +28,16 @@ const (
 	maxProcessingTime = 2 * time.Second
 	slackTime         = 5 * time.Second
 )
+
+type DBError struct {
+	StatusCode int
+
+	Err error
+}
+
+func (r *DBError) Error() string {
+	return r.Err.Error()
+}
 
 func FullyQualifiedStructName(v interface{}) string {
 	s := fmt.Sprintf("%T", v)
@@ -39,14 +50,13 @@ type Aggregate interface {
 	GetAggregateId() string
 	GetAggregateName() string
 }
-
 type Reservation struct {
-	Id        string
-	RoomId    string
-	GuestName string
-	Price     int64
-	StartDate time.Time
-	EndDate   time.Time
+	Id        string    `bson:"_id"`
+	RoomId    string    `bson:"room_id"`
+	GuestName string    `bson:"guest_name"`
+	Price     int64     `bson:"price"`
+	StartDate time.Time `bson:"start_date"`
+	EndDate   time.Time `bson:"end_date"`
 }
 
 func (r Reservation) GetAggregateId() string {
@@ -58,35 +68,50 @@ func (r Reservation) GetAggregateName() string {
 }
 
 type ReservationRepository struct {
-	reservations map[string]Reservation
+	collection *mongo.Collection
 }
 
-func NewReservationRepository() *ReservationRepository {
+func NewReservationRepository(collection *mongo.Collection) *ReservationRepository {
 	return &ReservationRepository{
-		reservations: make(map[string]Reservation),
+		collection,
 	}
 }
 
-func (repo *ReservationRepository) FindById(id string) (Reservation, error) {
-	r, ok := repo.reservations[id]
+func (repo *ReservationRepository) FindById(ctx context.Context, id string) (Reservation, error) {
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
-	if !ok {
-		keys := make([]string, len(repo.reservations))
+	filter := bson.M{"_id": id}
+	reservation := Reservation{}
 
-		i := 0
-		for k := range repo.reservations {
-			keys[i] = k
-			i++
+	err := repo.collection.FindOne(opCtx, filter).Decode(&reservation)
+
+	if err == mongo.ErrNoDocuments {
+		return reservation, &DBError{
+			StatusCode: 0,
+			Err:        err,
 		}
-
-		return r, fmt.Errorf("Reservation not found for %s %v", id, keys)
 	}
 
-	return r, nil
+	if err != nil {
+		return reservation, &DBError{
+			StatusCode: -1,
+			Err:        err,
+		}
+	}
+
+	return reservation, nil
 }
 
-func (repo *ReservationRepository) Save(r Reservation) error {
-	repo.reservations[r.Id] = r
+func (repo *ReservationRepository) Save(ctx context.Context, r Reservation) error {
+	_, insertError := repo.collection.InsertOne(ctx, r)
+
+	if insertError != nil {
+		return &DBError{
+			StatusCode: -1,
+			Err:        insertError,
+		}
+	}
 
 	return nil
 }
@@ -306,7 +331,7 @@ func (b RoomBookedHandler) Handle(ctx context.Context, c interface{}) error {
 		StartDate: event.StartDate.AsTime(),
 		EndDate:   event.EndDate.AsTime(),
 	}
-	err := b.aggregateRepository.Save(reservation)
+	err := b.aggregateRepository.Save(ctx, reservation)
 	if err != nil {
 		return err
 	}
@@ -387,14 +412,14 @@ func (b BeerOrderedHandler) Handle(ctx context.Context, c interface{}) error {
 		event.CqrsHeader(), event.GetPartitionKey(),
 	)
 
-	reservation, err := b.aggregateRepository.FindById(event.GetReservationId())
+	reservation, err := b.aggregateRepository.FindById(ctx, event.GetReservationId())
 	if err != nil {
 		return err
 	}
 
 	reservation.Price += 5 * event.Count
 
-	return b.aggregateRepository.Save(reservation)
+	return b.aggregateRepository.Save(ctx, reservation)
 }
 
 type PersistentCommandEventMarshaler struct {
@@ -519,8 +544,6 @@ func main() {
 		panic(err)
 	}
 
-	reservationRepository := NewReservationRepository()
-
 	// Simple middleware which will recover panics from event or command handlers.
 	// More about router middlewares you can find in the documentation:
 	// https://watermill.io/docs/messages-router/#middleware
@@ -542,6 +565,10 @@ func main() {
 	}
 
 	cqrsMessagesCollection := client.Database("kincirair").Collection("cqrs_messages")
+	reservationsCollection := client.Database("kincirair").Collection("reservations")
+
+	reservationRepository := NewReservationRepository(reservationsCollection)
+
 	cqrsMarshaler := PersistentCommandEventMarshaler{
 		cqrsMessagesCollection,
 		PartitionedCommandEventMarshaler{cqrs.ProtobufMarshaler{}},
