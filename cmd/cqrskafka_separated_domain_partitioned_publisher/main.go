@@ -58,29 +58,30 @@ type CqrsMessage interface {
 
 func NewCqrsHeader(
 	trigger CqrsMessage, messageType CqrsMessageType,
-	aggregate Aggregate,
+	aggregate Aggregate, processId string, processName string,
 ) *CqrsHeader {
+	id := watermill.NewUUID()
 	correlationId := ""
-	processId := ""
-	processName := ""
 
 	if trigger != nil {
-		if trigger.CqrsHeader().CorrelationId == "" {
-			correlationId = trigger.CqrsHeader().Id
-		} else {
-			correlationId = trigger.CqrsHeader().CorrelationId
-		}
+		correlationId = trigger.CqrsHeader().CorrelationId
+	}
+	if correlationId == "" {
+		correlationId = id
+	}
 
-		if trigger.CqrsHeader().ProcessId == "" {
+	if processId == "" {
+		if trigger != nil {
 			processId = trigger.CqrsHeader().ProcessId
 			processName = trigger.CqrsHeader().ProcessName
 		}
 	}
 
 	return &CqrsHeader{
-		Id:            watermill.NewUUID(),
-		CorrelationId: correlationId,
 		Type:          messageType,
+		Domain:        "kincirair",
+		Id:            id,
+		CorrelationId: correlationId,
 		AggregateName: FullyQualifiedStructName(aggregate),
 		ProcessId:     processId,
 		ProcessName:   processName,
@@ -93,7 +94,7 @@ func NewBookRoom(
 	endDate *timestamppb.Timestamp,
 ) *BookRoom {
 	return &BookRoom{
-		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}, "", ""),
 		RoomId:    roomId,
 		GuestName: guestName,
 		StartDate: startDate,

@@ -12,15 +12,19 @@ enum CqrsMessageType {
 
 message CqrsHeader {
     CqrsMessageType type = 1;
-    string id = 2;
-    string name = 3;
-    string correlation_id = 4;
-    string aggregate_id = 5;
-    string aggregate_name = 6;
-    string process_id = 7;
-    string process_name = 8;
+    string domain = 2;
+    string origin_domain = 3;
+    string id = 4;
+    string name = 5;    
+    string correlation_id = 6;
+    string aggregate_id = 7;
+    string aggregate_name = 8;
+    int32 aggregate_revision = 9;
+    string process_id = 10;
+    string process_name = 11;
+    int32 version = 12;
 
-    google.protobuf.Timestamp sent_date = 9;
+    google.protobuf.Timestamp sent_date = 13;
 }
 
 message BookRoom {

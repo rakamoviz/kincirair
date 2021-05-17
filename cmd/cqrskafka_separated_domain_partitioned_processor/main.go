@@ -130,29 +130,30 @@ func (beerOrderedEvt *BeerOrdered) GetPartitionKey() string {
 
 func NewCqrsHeader(
 	trigger CqrsMessage, messageType CqrsMessageType,
-	aggregate Aggregate,
+	aggregate Aggregate, processId string, processName string,
 ) *CqrsHeader {
+	id := watermill.NewUUID()
 	correlationId := ""
-	processId := ""
-	processName := ""
 
 	if trigger != nil {
-		if trigger.CqrsHeader().CorrelationId == "" {
-			correlationId = trigger.CqrsHeader().Id
-		} else {
-			correlationId = trigger.CqrsHeader().CorrelationId
-		}
+		correlationId = trigger.CqrsHeader().CorrelationId
+	}
+	if correlationId == "" {
+		correlationId = id
+	}
 
-		if trigger.CqrsHeader().ProcessId == "" {
+	if processId == "" {
+		if trigger != nil {
 			processId = trigger.CqrsHeader().ProcessId
 			processName = trigger.CqrsHeader().ProcessName
 		}
 	}
 
 	return &CqrsHeader{
-		Id:            watermill.NewUUID(),
-		CorrelationId: correlationId,
 		Type:          messageType,
+		Domain:        "kincirair",
+		Id:            id,
+		CorrelationId: correlationId,
 		AggregateName: FullyQualifiedStructName(aggregate),
 		ProcessId:     processId,
 		ProcessName:   processName,
@@ -165,7 +166,7 @@ func NewBookRoom(
 	endDate *timestamppb.Timestamp,
 ) *BookRoom {
 	return &BookRoom{
-		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}, "", ""),
 		RoomId:    roomId,
 		GuestName: guestName,
 		StartDate: startDate,
@@ -180,7 +181,7 @@ func NewRoomBooked(
 	endDate *timestamppb.Timestamp,
 ) *RoomBooked {
 	return &RoomBooked{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}),
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}, "", ""),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		GuestName:     guestName,
@@ -195,7 +196,7 @@ func NewOrderBeer(
 	roomId string, count int64,
 ) *OrderBeer {
 	return &OrderBeer{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}, "", ""),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		Count:         count,
@@ -207,7 +208,7 @@ func NewBeerOrdered(
 	roomId string, count int64,
 ) *BeerOrdered {
 	return &BeerOrdered{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}),
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}, "", ""),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		Count:         count,
@@ -386,6 +387,43 @@ func (b BeerOrderedHandler) Handle(ctx context.Context, c interface{}) error {
 	return b.aggregateRepository.Save(reservation)
 }
 
+type PersistentCommandEventMarshaler struct {
+	cqrsMessagesCollection *mongo.Collection
+	delegate               cqrs.CommandEventMarshaler
+}
+
+func (m PersistentCommandEventMarshaler) Marshal(v interface{}) (*message.Message, error) {
+	return m.delegate.Marshal(v)
+}
+
+func (m PersistentCommandEventMarshaler) Unmarshal(msg *message.Message, v interface{}) (err error) {
+	unmarshalError := m.delegate.Unmarshal(msg, v)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if unmarshalError == nil {
+		cqrsMessage, ok := v.(CqrsMessage)
+		if ok {
+			cqrsMessage.CqrsHeader().Name = FullyQualifiedStructName(cqrsMessage)
+			_, insertError := m.cqrsMessagesCollection.InsertOne(ctx, cqrsMessage)
+			if insertError != nil {
+				fmt.Println("Error saving cmd ", cqrsMessage)
+			}
+		}
+	}
+
+	return unmarshalError
+}
+
+func (m PersistentCommandEventMarshaler) Name(v interface{}) string {
+	return m.delegate.Name(v)
+}
+
+func (m PersistentCommandEventMarshaler) NameFromMessage(msg *message.Message) string {
+	return m.delegate.NameFromMessage(msg)
+}
+
 type PartitionedCommandEventMarshaler struct {
 	delegate cqrs.CommandEventMarshaler
 }
@@ -401,7 +439,12 @@ func (m PartitionedCommandEventMarshaler) Marshal(v interface{}) (*message.Messa
 }
 
 func (m PartitionedCommandEventMarshaler) Unmarshal(msg *message.Message, v interface{}) (err error) {
-	return m.delegate.Unmarshal(msg, v)
+	err = m.delegate.Unmarshal(msg, v)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m PartitionedCommandEventMarshaler) Name(v interface{}) string {
@@ -412,63 +455,8 @@ func (m PartitionedCommandEventMarshaler) NameFromMessage(msg *message.Message) 
 	return m.delegate.NameFromMessage(msg)
 }
 
-type PersistentCommandHandler struct {
-	collection *mongo.Collection
-	delegate   cqrs.CommandHandler
-}
-
-func (h PersistentCommandHandler) HandlerName() string {
-	return h.delegate.HandlerName()
-}
-
-func (h PersistentCommandHandler) NewCommand() interface{} {
-	return h.delegate.NewCommand()
-}
-
-func (h PersistentCommandHandler) Handle(ctx context.Context, cmd interface{}) error {
-	handlingError := h.delegate.Handle(ctx, cmd)
-	if handlingError == nil {
-		cqrsMessage := cmd.(CqrsMessage)
-		cqrsMessage.CqrsHeader().Name = FullyQualifiedStructName(cmd)
-		_, insertError := h.collection.InsertOne(ctx, cmd)
-		if insertError != nil {
-			fmt.Println("Error saving cmd ", cmd)
-		}
-	}
-
-	return handlingError
-}
-
-type PersistentEventHandler struct {
-	collection *mongo.Collection
-	delegate   cqrs.EventHandler
-}
-
-func (h PersistentEventHandler) HandlerName() string {
-	return h.delegate.HandlerName()
-}
-
-func (h PersistentEventHandler) NewEvent() interface{} {
-	return h.delegate.NewEvent()
-}
-
-func (h PersistentEventHandler) Handle(ctx context.Context, evt interface{}) error {
-	handlingError := h.delegate.Handle(ctx, evt)
-	if handlingError == nil {
-		cqrsMessage := evt.(CqrsMessage)
-		cqrsMessage.CqrsHeader().Name = FullyQualifiedStructName(evt)
-		_, insertError := h.collection.InsertOne(ctx, evt)
-		if insertError != nil {
-			fmt.Println("Error saving evt ", evt)
-		}
-	}
-
-	return handlingError
-}
-
 func main() {
 	logger := watermill.NewStdLogger(false, false)
-	cqrsMarshaler := PartitionedCommandEventMarshaler{cqrs.ProtobufMarshaler{}}
 
 	commandsSubscriberConfig := kafka.DefaultSaramaSubscriberConfig()
 	commandsSubscriberConfig.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRoundRobin
@@ -544,6 +532,10 @@ func main() {
 	}
 
 	cqrsMessagesCollection := client.Database("kincirair").Collection("cqrs_messages")
+	cqrsMarshaler := PersistentCommandEventMarshaler{
+		cqrsMessagesCollection,
+		PartitionedCommandEventMarshaler{cqrs.ProtobufMarshaler{}},
+	}
 
 	// cqrs.Facade is facade for Command and Event buses and processors.
 	// You can use facade, or create buses and processors manually (you can inspire with cqrs.NewFacade)
@@ -553,8 +545,8 @@ func main() {
 		},
 		CommandHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.CommandHandler {
 			return []cqrs.CommandHandler{
-				PersistentCommandHandler{cqrsMessagesCollection, BookRoomHandler{eb, reservationRepository}},
-				PersistentCommandHandler{cqrsMessagesCollection, OrderBeerHandler{eb, reservationRepository}},
+				BookRoomHandler{eb, reservationRepository},
+				OrderBeerHandler{eb, reservationRepository},
 			}
 		},
 		CommandsPublisher: commandsPublisher,
@@ -567,8 +559,8 @@ func main() {
 		},
 		EventHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.EventHandler {
 			return []cqrs.EventHandler{
-				PersistentEventHandler{cqrsMessagesCollection, RoomBookedHandler{cb, reservationRepository}},
-				PersistentEventHandler{cqrsMessagesCollection, BeerOrderedHandler{reservationRepository}},
+				RoomBookedHandler{cb, reservationRepository},
+				BeerOrderedHandler{reservationRepository},
 			}
 		},
 		EventsPublisher: eventsPublisher,
