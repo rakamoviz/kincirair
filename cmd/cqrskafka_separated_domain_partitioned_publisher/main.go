@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
@@ -20,18 +22,87 @@ const (
 	slackTime         = 5 * time.Second
 )
 
+func FullyQualifiedStructName(v interface{}) string {
+	s := fmt.Sprintf("%T", v)
+	s = strings.TrimLeft(s, "*")
+
+	return s
+}
+
+type Aggregate interface {
+	GetAggregateId() string
+	GetAggregateName() string
+}
+
+type Reservation struct {
+	Id        string
+	RoomId    string
+	GuestName string
+	Price     int64
+	StartDate time.Time
+	EndDate   time.Time
+}
+
+func (r Reservation) GetAggregateId() string {
+	return r.Id
+}
+
+func (r Reservation) GetAggregateName() string {
+	return FullyQualifiedStructName(r)
+}
+
 type CqrsMessage interface {
-	GetCqrsAggregateId() string
-	GetCqrsAggregateName() string
+	CqrsHeader() *CqrsHeader
 	GetPartitionKey() string
 }
 
-func (bookRoomCmd *BookRoom) GetCqrsAggregateId() string {
-	return bookRoomCmd.RoomId
+func NewCqrsHeader(
+	trigger CqrsMessage, messageType CqrsMessageType,
+	aggregate Aggregate,
+) *CqrsHeader {
+	correlationId := ""
+	processId := ""
+	processName := ""
+
+	if trigger != nil {
+		if trigger.CqrsHeader().CorrelationId == "" {
+			correlationId = trigger.CqrsHeader().Id
+		} else {
+			correlationId = trigger.CqrsHeader().CorrelationId
+		}
+
+		if trigger.CqrsHeader().ProcessId == "" {
+			processId = trigger.CqrsHeader().ProcessId
+			processName = trigger.CqrsHeader().ProcessName
+		}
+	}
+
+	return &CqrsHeader{
+		Id:            watermill.NewUUID(),
+		CorrelationId: correlationId,
+		Type:          messageType,
+		AggregateName: FullyQualifiedStructName(aggregate),
+		ProcessId:     processId,
+		ProcessName:   processName,
+	}
 }
 
-func (bookRoomCmd *BookRoom) GetCqrsAggregateName() string {
-	return bookRoomCmd.RoomId
+func NewBookRoom(
+	trigger CqrsMessage, roomId string, guestName string,
+	startDate *timestamppb.Timestamp,
+	endDate *timestamppb.Timestamp,
+) *BookRoom {
+	return &BookRoom{
+		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		RoomId:    roomId,
+		GuestName: guestName,
+		StartDate: startDate,
+		EndDate:   endDate,
+	}
+}
+
+func (bookRoomCmd *BookRoom) CqrsHeader() *CqrsHeader {
+	return bookRoomCmd.Header
 }
 
 func (bookRoomCmd *BookRoom) GetPartitionKey() string {
@@ -43,17 +114,31 @@ type PartitionedCommandEventMarshaler struct {
 }
 
 func (m PartitionedCommandEventMarshaler) Marshal(v interface{}) (*message.Message, error) {
-	msg, err := m.delegate.Marshal(v)
+	cqrsMessage := v.(CqrsMessage)
 
-	if err == nil {
-		msg.Metadata.Set("partition", v.(CqrsMessage).GetPartitionKey())
+	sentDate, err := ptypes.TimestampProto(time.Now())
+	if err != nil {
+		return nil, err
 	}
 
-	return msg, err
+	cqrsMessage.CqrsHeader().SentDate = sentDate
+
+	msg, err := m.delegate.Marshal(v)
+	if err != nil {
+		return msg, err
+	}
+
+	msg.Metadata.Set("partition", cqrsMessage.GetPartitionKey())
+	return msg, nil
 }
 
 func (m PartitionedCommandEventMarshaler) Unmarshal(msg *message.Message, v interface{}) (err error) {
-	return m.delegate.Unmarshal(msg, v)
+	err = m.delegate.Unmarshal(msg, v)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m PartitionedCommandEventMarshaler) Name(v interface{}) string {
@@ -112,12 +197,7 @@ func publishCommands(commandBus *cqrs.CommandBus) func() {
 			panic(err)
 		}
 
-		bookRoomCmd := &BookRoom{
-			RoomId:    fmt.Sprintf("%d", i),
-			GuestName: "John",
-			StartDate: startDate,
-			EndDate:   endDate,
-		}
+		bookRoomCmd := NewBookRoom(nil, fmt.Sprintf("%d", i), "John", startDate, endDate)
 		if err := commandBus.Send(context.Background(), bookRoomCmd); err != nil {
 			panic(err)
 		}

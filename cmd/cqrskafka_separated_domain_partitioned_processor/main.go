@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
+	"github.com/pkg/errors"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Shopify/sarama"
 	"github.com/ThreeDotsLabs/watermill-kafka/v2/pkg/kafka"
@@ -66,7 +69,15 @@ func (repo *ReservationRepository) FindById(id string) (Reservation, error) {
 	r, ok := repo.reservations[id]
 
 	if !ok {
-		return r, fmt.Errorf("Reservation not found for %s", id)
+		keys := make([]string, len(repo.reservations))
+
+		i := 0
+		for k := range repo.reservations {
+			keys[i] = k
+			i++
+		}
+
+		return r, fmt.Errorf("Reservation not found for %s %v", id, keys)
 	}
 
 	return r, nil
@@ -79,33 +90,126 @@ func (repo *ReservationRepository) Save(r Reservation) error {
 }
 
 type CqrsMessage interface {
-	GetCqrsAggregateId() string
-	GetCqrsAggregateName() string
+	CqrsHeader() *CqrsHeader
 	GetPartitionKey() string
 }
 
-func (bookRoomCmd *BookRoom) GetCqrsAggregateId() string {
-	return bookRoomCmd.RoomId
-}
-
-func (bookRoomCmd *BookRoom) GetCqrsAggregateName() string {
-	return bookRoomCmd.RoomId
+func (bookRoomCmd *BookRoom) CqrsHeader() *CqrsHeader {
+	return bookRoomCmd.Header
 }
 
 func (bookRoomCmd *BookRoom) GetPartitionKey() string {
 	return bookRoomCmd.RoomId
 }
 
-func (roomBookedEvt *RoomBooked) GetCqrsAggregateId() string {
-	return roomBookedEvt.RoomId
-}
-
-func (roomBookedEvt *RoomBooked) GetCqrsAggregateName() string {
-	return roomBookedEvt.RoomId
+func (roomBookedEvt *RoomBooked) CqrsHeader() *CqrsHeader {
+	return roomBookedEvt.Header
 }
 
 func (roomBookedEvt *RoomBooked) GetPartitionKey() string {
 	return roomBookedEvt.RoomId
+}
+
+func (orderBeerCmd *OrderBeer) CqrsHeader() *CqrsHeader {
+	return orderBeerCmd.Header
+}
+
+func (orderBeerCmd *OrderBeer) GetPartitionKey() string {
+	return orderBeerCmd.RoomId
+}
+
+func (beerOrderedEvt *BeerOrdered) CqrsHeader() *CqrsHeader {
+	return beerOrderedEvt.Header
+}
+
+func (beerOrderedEvt *BeerOrdered) GetPartitionKey() string {
+	return beerOrderedEvt.RoomId
+}
+
+func NewCqrsHeader(
+	trigger CqrsMessage, messageType CqrsMessageType,
+	aggregate Aggregate,
+) *CqrsHeader {
+	correlationId := ""
+	processId := ""
+	processName := ""
+
+	if trigger != nil {
+		if trigger.CqrsHeader().CorrelationId == "" {
+			correlationId = trigger.CqrsHeader().Id
+		} else {
+			correlationId = trigger.CqrsHeader().CorrelationId
+		}
+
+		if trigger.CqrsHeader().ProcessId == "" {
+			processId = trigger.CqrsHeader().ProcessId
+			processName = trigger.CqrsHeader().ProcessName
+		}
+	}
+
+	return &CqrsHeader{
+		Id:            watermill.NewUUID(),
+		CorrelationId: correlationId,
+		Type:          messageType,
+		AggregateName: FullyQualifiedStructName(aggregate),
+		ProcessId:     processId,
+		ProcessName:   processName,
+	}
+}
+
+func NewBookRoom(
+	trigger CqrsMessage, roomId string, guestName string,
+	startDate *timestamppb.Timestamp,
+	endDate *timestamppb.Timestamp,
+) *BookRoom {
+	return &BookRoom{
+		Header:    NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		RoomId:    roomId,
+		GuestName: guestName,
+		StartDate: startDate,
+		EndDate:   endDate,
+	}
+}
+
+func NewRoomBooked(
+	trigger CqrsMessage, reservationId string, roomId string,
+	guestName string, price int64,
+	startDate *timestamppb.Timestamp,
+	endDate *timestamppb.Timestamp,
+) *RoomBooked {
+	return &RoomBooked{
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}),
+		ReservationId: reservationId,
+		RoomId:        roomId,
+		GuestName:     guestName,
+		Price:         price,
+		StartDate:     startDate,
+		EndDate:       endDate,
+	}
+}
+
+func NewOrderBeer(
+	trigger CqrsMessage, reservationId string,
+	roomId string, count int64,
+) *OrderBeer {
+	return &OrderBeer{
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}),
+		ReservationId: reservationId,
+		RoomId:        roomId,
+		Count:         count,
+	}
+}
+
+func NewBeerOrdered(
+	trigger CqrsMessage, reservationId string,
+	roomId string, count int64,
+) *BeerOrdered {
+	return &BeerOrdered{
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}),
+		ReservationId: reservationId,
+		RoomId:        roomId,
+		Count:         count,
+	}
 }
 
 // BookRoomHandler is a command handler, which handles BookRoom command and emits RoomBooked.
@@ -132,7 +236,7 @@ func (b BookRoomHandler) Handle(ctx context.Context, c interface{}) error {
 
 	fmt.Printf(
 		"BookRoomHandler handling BookRoom command for aggregate ID %s with partition-key %s\n",
-		cmd.GetCqrsAggregateId(), cmd.GetPartitionKey(),
+		cmd.Header.AggregateId, cmd.GetPartitionKey(),
 	)
 
 	// some random price, in production you probably will calculate in wiser way
@@ -146,14 +250,12 @@ func (b BookRoomHandler) Handle(ctx context.Context, c interface{}) error {
 		time.Unix(cmd.EndDate.Seconds, int64(cmd.EndDate.Nanos)),
 	)
 
-	if err := b.eventBus.Publish(ctx, &RoomBooked{
-		ReservationId: watermill.NewUUID(),
-		RoomId:        cmd.RoomId,
-		GuestName:     cmd.GuestName,
-		Price:         price,
-		StartDate:     cmd.StartDate,
-		EndDate:       cmd.EndDate,
-	}); err != nil {
+	if err := b.eventBus.Publish(ctx,
+		NewRoomBooked(
+			cmd, watermill.NewUUID(), cmd.RoomId,
+			cmd.GuestName, price,
+			cmd.StartDate, cmd.EndDate,
+		)); err != nil {
 		return err
 	}
 
@@ -161,6 +263,7 @@ func (b BookRoomHandler) Handle(ctx context.Context, c interface{}) error {
 }
 
 type RoomBookedHandler struct {
+	commandBus          *cqrs.CommandBus
 	aggregateRepository *ReservationRepository
 }
 
@@ -179,7 +282,7 @@ func (b RoomBookedHandler) Handle(ctx context.Context, c interface{}) error {
 
 	fmt.Printf(
 		"RoomBookedHandler handling RoomBooked event for aggregate ID %s with partition-key %s\n",
-		event.GetCqrsAggregateId(), event.GetPartitionKey(),
+		event.Header.AggregateId, event.GetPartitionKey(),
 	)
 
 	reservation := Reservation{
@@ -190,6 +293,93 @@ func (b RoomBookedHandler) Handle(ctx context.Context, c interface{}) error {
 		StartDate: event.StartDate.AsTime(),
 		EndDate:   event.EndDate.AsTime(),
 	}
+	err := b.aggregateRepository.Save(reservation)
+	if err != nil {
+		return err
+	}
+
+	roomIdInt, err := strconv.Atoi(event.RoomId)
+	if err != nil {
+		return err
+	}
+
+	if roomIdInt%7 == 0 {
+		orderBeerCmd := NewOrderBeer(
+			event, event.ReservationId, event.RoomId,
+			rand.Int63n(10)+1,
+		)
+
+		return b.commandBus.Send(ctx, orderBeerCmd)
+	}
+
+	return nil
+}
+
+type OrderBeerHandler struct {
+	eventBus            *cqrs.EventBus
+	aggregateRepository *ReservationRepository
+}
+
+func (o OrderBeerHandler) HandlerName() string {
+	return "OrderBeerHandler"
+}
+
+func (o OrderBeerHandler) NewCommand() interface{} {
+	return &OrderBeer{}
+}
+
+func (o OrderBeerHandler) Handle(ctx context.Context, c interface{}) error {
+	cmd := c.(*OrderBeer)
+
+	fmt.Printf(
+		"OrderBeerHandler handling OrderBeer command for aggregate ID %s with partition-key %s\n",
+		cmd.CqrsHeader().AggregateId, cmd.GetPartitionKey(),
+	)
+
+	if rand.Int63n(10) == 0 {
+		// sometimes there is no beer left, command will be retried
+		return errors.Errorf("no beer left for room %s, please try later", cmd.RoomId)
+	}
+
+	if err := o.eventBus.Publish(ctx, NewOrderBeer(
+		cmd, cmd.ReservationId, cmd.RoomId,
+		cmd.Count,
+	)); err != nil {
+		return err
+	}
+
+	log.Printf("%d beers ordered to room %s", cmd.Count, cmd.RoomId)
+	return nil
+}
+
+type BeerOrderedHandler struct {
+	aggregateRepository *ReservationRepository
+}
+
+func (b BeerOrderedHandler) HandlerName() string {
+	return "BeerOrderedHandler"
+}
+
+// NewCommand returns type of command which this handle should handle. It must be a pointer.
+func (b BeerOrderedHandler) NewEvent() interface{} {
+	return &BeerOrdered{}
+}
+
+func (b BeerOrderedHandler) Handle(ctx context.Context, c interface{}) error {
+	// c is always the type returned by `NewCommand`, so casting is always safe
+	event := c.(*BeerOrdered)
+
+	fmt.Printf(
+		"BeerOrderedHandler handling BeerOrdered event for aggregate ID %s with partition-key %s\n",
+		event.CqrsHeader(), event.GetPartitionKey(),
+	)
+
+	reservation, err := b.aggregateRepository.FindById(event.GetReservationId())
+	if err != nil {
+		return err
+	}
+
+	reservation.Price += 5 * event.Count
 
 	return b.aggregateRepository.Save(reservation)
 }
@@ -293,6 +483,7 @@ func main() {
 		CommandHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.CommandHandler {
 			return []cqrs.CommandHandler{
 				BookRoomHandler{eb, reservationRepository},
+				OrderBeerHandler{eb, reservationRepository},
 			}
 		},
 		CommandsPublisher: commandsPublisher,
@@ -305,7 +496,8 @@ func main() {
 		},
 		EventHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.EventHandler {
 			return []cqrs.EventHandler{
-				RoomBookedHandler{reservationRepository},
+				RoomBookedHandler{cb, reservationRepository},
+				BeerOrderedHandler{reservationRepository},
 			}
 		},
 		EventsPublisher: eventsPublisher,

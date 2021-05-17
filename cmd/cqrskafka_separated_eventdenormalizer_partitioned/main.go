@@ -13,6 +13,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill-kafka/v2/pkg/kafka"
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/message"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -90,7 +91,15 @@ func (repo *ReservationRepository) FindById(id string) (Reservation, error) {
 	r, ok := repo.reservations[id]
 
 	if !ok {
-		return r, fmt.Errorf("Reservation not found for %s", id)
+		keys := make([]string, len(repo.reservations))
+
+		i := 0
+		for k := range repo.reservations {
+			keys[i] = k
+			i++
+		}
+
+		return r, fmt.Errorf("Reservation not found for %s %v", id, keys)
 	}
 
 	return r, nil
@@ -102,22 +111,65 @@ func (repo *ReservationRepository) Save(r Reservation) error {
 	return nil
 }
 
+func NewCqrsHeader(
+	trigger CqrsMessage, messageType CqrsMessageType,
+	aggregate Aggregate,
+) *CqrsHeader {
+	correlationId := ""
+	processId := ""
+	processName := ""
+
+	if trigger != nil {
+		if trigger.CqrsHeader().CorrelationId == "" {
+			correlationId = trigger.CqrsHeader().Id
+		} else {
+			correlationId = trigger.CqrsHeader().CorrelationId
+		}
+
+		if trigger.CqrsHeader().ProcessId == "" {
+			processId = trigger.CqrsHeader().ProcessId
+			processName = trigger.CqrsHeader().ProcessName
+		}
+	}
+
+	return &CqrsHeader{
+		Id:            watermill.NewUUID(),
+		CorrelationId: correlationId,
+		Type:          messageType,
+		AggregateName: FullyQualifiedStructName(aggregate),
+		ProcessId:     processId,
+		ProcessName:   processName,
+	}
+}
+
 type CqrsMessage interface {
-	GetCqrsAggregateId() string
-	GetCqrsAggregateName() string
+	CqrsHeader() *CqrsHeader
 	GetPartitionKey() string
 }
 
-func (roomBookedEvt *RoomBooked) GetCqrsAggregateId() string {
-	return roomBookedEvt.RoomId
-}
-
-func (roomBookedEvt *RoomBooked) GetCqrsAggregateName() string {
-	return roomBookedEvt.RoomId
+func (roomBookedEvt *RoomBooked) CqrsHeader() *CqrsHeader {
+	return roomBookedEvt.Header
 }
 
 func (roomBookedEvt *RoomBooked) GetPartitionKey() string {
 	return roomBookedEvt.RoomId
+}
+
+func NewRoomBooked(
+	trigger CqrsMessage, reservationId string, roomId string,
+	guestName string, price int64,
+	startDate *timestamppb.Timestamp,
+	endDate *timestamppb.Timestamp,
+) *RoomBooked {
+	return &RoomBooked{
+		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}),
+		ReservationId: reservationId,
+		RoomId:        roomId,
+		GuestName:     guestName,
+		Price:         price,
+		StartDate:     startDate,
+		EndDate:       endDate,
+	}
 }
 
 type BookingsFinancialReport struct {
@@ -143,7 +195,7 @@ func (b *BookingsFinancialReport) Handle(ctx context.Context, e interface{}) err
 
 	fmt.Printf(
 		"BookingsFinancialReport handling RoomBooked event for aggregate ID %s with partition-key %s\n",
-		event.GetCqrsAggregateId(), event.GetPartitionKey(),
+		event.CqrsHeader().AggregateId, event.GetPartitionKey(),
 	)
 
 	// When we are using Pub/Sub which doesn't provide exactly-once delivery semantics, we need to deduplicate messages.
