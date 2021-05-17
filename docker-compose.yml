@@ -41,3 +41,13 @@ services:
     ports:
       - 5672:5672
       - 15672:15672
+
+  mongodb:
+    image: mongo
+    ports:
+      - 27017:27017
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - .docker/mongodb/database:/data/db

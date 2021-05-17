@@ -14,6 +14,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
 	"github.com/pkg/errors"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Shopify/sarama"
@@ -410,6 +412,60 @@ func (m PartitionedCommandEventMarshaler) NameFromMessage(msg *message.Message) 
 	return m.delegate.NameFromMessage(msg)
 }
 
+type PersistentCommandHandler struct {
+	collection *mongo.Collection
+	delegate   cqrs.CommandHandler
+}
+
+func (h PersistentCommandHandler) HandlerName() string {
+	return h.delegate.HandlerName()
+}
+
+func (h PersistentCommandHandler) NewCommand() interface{} {
+	return h.delegate.NewCommand()
+}
+
+func (h PersistentCommandHandler) Handle(ctx context.Context, cmd interface{}) error {
+	handlingError := h.delegate.Handle(ctx, cmd)
+	if handlingError == nil {
+		cqrsMessage := cmd.(CqrsMessage)
+		cqrsMessage.CqrsHeader().Name = FullyQualifiedStructName(cmd)
+		_, insertError := h.collection.InsertOne(ctx, cmd)
+		if insertError != nil {
+			fmt.Println("Error saving cmd ", cmd)
+		}
+	}
+
+	return handlingError
+}
+
+type PersistentEventHandler struct {
+	collection *mongo.Collection
+	delegate   cqrs.EventHandler
+}
+
+func (h PersistentEventHandler) HandlerName() string {
+	return h.delegate.HandlerName()
+}
+
+func (h PersistentEventHandler) NewEvent() interface{} {
+	return h.delegate.NewEvent()
+}
+
+func (h PersistentEventHandler) Handle(ctx context.Context, evt interface{}) error {
+	handlingError := h.delegate.Handle(ctx, evt)
+	if handlingError == nil {
+		cqrsMessage := evt.(CqrsMessage)
+		cqrsMessage.CqrsHeader().Name = FullyQualifiedStructName(evt)
+		_, insertError := h.collection.InsertOne(ctx, evt)
+		if insertError != nil {
+			fmt.Println("Error saving evt ", evt)
+		}
+	}
+
+	return handlingError
+}
+
 func main() {
 	logger := watermill.NewStdLogger(false, false)
 	cqrsMarshaler := PartitionedCommandEventMarshaler{cqrs.ProtobufMarshaler{}}
@@ -474,6 +530,21 @@ func main() {
 	// List of available middlewares you can find in message/router/middleware.
 	router.AddMiddleware(middleware.Recoverer)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017/")
+	client, err := mongo.Connect(ctx, clientOptions)
+
+	time.Sleep(1 * time.Second)
+
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cqrsMessagesCollection := client.Database("kincirair").Collection("cqrs_messages")
+
 	// cqrs.Facade is facade for Command and Event buses and processors.
 	// You can use facade, or create buses and processors manually (you can inspire with cqrs.NewFacade)
 	_, err = cqrs.NewFacade(cqrs.FacadeConfig{
@@ -482,8 +553,8 @@ func main() {
 		},
 		CommandHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.CommandHandler {
 			return []cqrs.CommandHandler{
-				BookRoomHandler{eb, reservationRepository},
-				OrderBeerHandler{eb, reservationRepository},
+				PersistentCommandHandler{cqrsMessagesCollection, BookRoomHandler{eb, reservationRepository}},
+				PersistentCommandHandler{cqrsMessagesCollection, OrderBeerHandler{eb, reservationRepository}},
 			}
 		},
 		CommandsPublisher: commandsPublisher,
@@ -496,8 +567,8 @@ func main() {
 		},
 		EventHandlers: func(cb *cqrs.CommandBus, eb *cqrs.EventBus) []cqrs.EventHandler {
 			return []cqrs.EventHandler{
-				RoomBookedHandler{cb, reservationRepository},
-				BeerOrderedHandler{reservationRepository},
+				PersistentEventHandler{cqrsMessagesCollection, RoomBookedHandler{cb, reservationRepository}},
+				PersistentEventHandler{cqrsMessagesCollection, BeerOrderedHandler{reservationRepository}},
 			}
 		},
 		EventsPublisher: eventsPublisher,
