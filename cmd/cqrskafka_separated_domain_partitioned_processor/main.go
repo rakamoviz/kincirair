@@ -154,6 +154,7 @@ func NewCqrsHeader(
 		Domain:        "kincirair",
 		Id:            id,
 		CorrelationId: correlationId,
+		AggregateId:   aggregate.GetAggregateId(),
 		AggregateName: FullyQualifiedStructName(aggregate),
 		ProcessId:     processId,
 		ProcessName:   processName,
@@ -181,7 +182,10 @@ func NewRoomBooked(
 	endDate *timestamppb.Timestamp,
 ) *RoomBooked {
 	return &RoomBooked{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}, "", ""),
+		Header: NewCqrsHeader(
+			trigger, CqrsMessageType_EVENT, Reservation{Id: reservationId},
+			"", "",
+		),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		GuestName:     guestName,
@@ -196,7 +200,10 @@ func NewOrderBeer(
 	roomId string, count int64,
 ) *OrderBeer {
 	return &OrderBeer{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_COMMAND, Reservation{}, "", ""),
+		Header: NewCqrsHeader(
+			trigger, CqrsMessageType_COMMAND,
+			Reservation{Id: reservationId}, "", "",
+		),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		Count:         count,
@@ -208,7 +215,10 @@ func NewBeerOrdered(
 	roomId string, count int64,
 ) *BeerOrdered {
 	return &BeerOrdered{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}, "", ""),
+		Header: NewCqrsHeader(
+			trigger, CqrsMessageType_EVENT, Reservation{Id: reservationId},
+			"", "",
+		),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		Count:         count,

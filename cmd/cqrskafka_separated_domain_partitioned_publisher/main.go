@@ -82,6 +82,7 @@ func NewCqrsHeader(
 		Domain:        "kincirair",
 		Id:            id,
 		CorrelationId: correlationId,
+		AggregateId:   aggregate.GetAggregateId(),
 		AggregateName: FullyQualifiedStructName(aggregate),
 		ProcessId:     processId,
 		ProcessName:   processName,

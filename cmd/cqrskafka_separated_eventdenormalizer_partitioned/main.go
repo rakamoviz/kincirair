@@ -137,6 +137,7 @@ func NewCqrsHeader(
 		Domain:        "kincirair",
 		Id:            id,
 		CorrelationId: correlationId,
+		AggregateId:   aggregate.GetAggregateId(),
 		AggregateName: FullyQualifiedStructName(aggregate),
 		ProcessId:     processId,
 		ProcessName:   processName,
@@ -163,7 +164,10 @@ func NewRoomBooked(
 	endDate *timestamppb.Timestamp,
 ) *RoomBooked {
 	return &RoomBooked{
-		Header:        NewCqrsHeader(trigger, CqrsMessageType_EVENT, Reservation{}, "", ""),
+		Header: NewCqrsHeader(
+			trigger, CqrsMessageType_EVENT, Reservation{Id: reservationId},
+			"", "",
+		),
 		ReservationId: reservationId,
 		RoomId:        roomId,
 		GuestName:     guestName,
